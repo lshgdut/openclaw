@@ -18,6 +18,7 @@ import type {
 } from "./client.types.js";
 import { DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS } from "./constants.js";
 import type { BrowserDoctorReport } from "./doctor.js";
+import type { AnnotationItem } from "./screenshot-annotate.js";
 
 export type { BrowserStatus, BrowserTab, BrowserTransport } from "./client.types.js";
 export type { BrowserDoctorCheck, BrowserDoctorReport } from "./doctor.js";
@@ -43,7 +44,12 @@ function resolveBrowserClientTimeoutMs(
 }
 
 function withProfilePath(baseUrl: string | undefined, path: string, profile?: string): string {
-  return withBaseUrl(baseUrl, `${path}${buildProfileQuery(profile)}`);
+  const profileQuery = buildProfileQuery(profile);
+  if (!profileQuery) {
+    return withBaseUrl(baseUrl, path);
+  }
+  const separator = path.includes("?") ? "&" : "?";
+  return withBaseUrl(baseUrl, `${path}${separator}${profileQuery.slice(1)}`);
 }
 
 async function sendProfilePost(
@@ -79,7 +85,7 @@ export type ProfileStatus = {
   cdpPort: number | null;
   cdpUrl: string | null;
   color: string;
-  driver: "openclaw" | "existing-session";
+  driver: "openclaw" | "existing-session" | "extension";
   running: boolean;
   tabCount: number;
   isDefault: boolean;
@@ -124,6 +130,11 @@ export type SnapshotResult =
       labels?: boolean;
       labelsCount?: number;
       labelsSkipped?: number;
+      /**
+       * Per-ref bounding boxes when labels=true. Coordinates are in the
+       * captured image's space. Omitted when empty.
+       */
+      annotations?: AnnotationItem[];
       imagePath?: string;
       imageType?: "png" | "jpeg";
       blockedByDialog?: boolean;
@@ -311,6 +322,16 @@ export async function browserCloseTab(
   opts?: { profile?: string; timeoutMs?: number },
 ): Promise<void> {
   const path = `/tabs/${encodeURIComponent(targetId)}`;
+  await sendTabTargetRequest({ baseUrl, path, method: "DELETE", opts });
+}
+
+/** Close a canonical raw target id selected by OpenClaw's internal tab bookkeeping. */
+export async function browserCloseTabByRawTargetId(
+  baseUrl: string | undefined,
+  targetId: string,
+  opts?: { profile?: string; timeoutMs?: number },
+): Promise<void> {
+  const path = `/tabs/${encodeURIComponent(targetId)}?targetIdMode=raw`;
   await sendTabTargetRequest({ baseUrl, path, method: "DELETE", opts });
 }
 

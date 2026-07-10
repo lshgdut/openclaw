@@ -163,7 +163,9 @@ final class ScreenController {
                 })()
                 """)
                 let trimmed = res.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                if trimmed == "true" || trimmed == "1" { return true }
+                if trimmed == "true" || trimmed == "1" {
+                    return true
+                }
             } catch {
                 // ignore; page likely still loading
             }
@@ -179,16 +181,6 @@ final class ScreenController {
             ])
         }
         return try await WebViewJavaScriptSupport.evaluateToString(webView: webView, javaScript: javaScript)
-    }
-
-    func snapshotPNGBase64(maxWidth: CGFloat? = nil) async throws -> String {
-        let image = try await self.snapshotImage(maxWidth: maxWidth)
-        guard let data = image.pngData() else {
-            throw NSError(domain: "Screen", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "snapshot encode failed",
-            ])
-        }
-        return data.base64EncodedString()
     }
 
     func snapshotBase64(
@@ -293,7 +285,9 @@ final class ScreenController {
     }
 
     nonisolated static func parseA2UIActionBody(_ body: Any) -> [String: Any]? {
-        if let dict = body as? [String: Any] { return dict.isEmpty ? nil : dict }
+        if let dict = body as? [String: Any] {
+            return dict.isEmpty ? nil : dict
+        }
         if let str = body as? String,
            let data = str.data(using: .utf8),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -323,8 +317,12 @@ final class ScreenController {
 
 extension Double {
     fileprivate func clamped(to range: ClosedRange<Double>) -> Double {
-        if self < range.lowerBound { return range.lowerBound }
-        if self > range.upperBound { return range.upperBound }
+        if self < range.lowerBound {
+            return range.lowerBound
+        }
+        if self > range.upperBound {
+            return range.upperBound
+        }
         return self
     }
 }

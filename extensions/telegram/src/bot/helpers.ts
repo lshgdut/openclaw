@@ -34,12 +34,16 @@ import {
   buildSenderName,
   extractTelegramLocation,
   getTelegramTextParts,
+  hasBotMentionInText,
   hasBotMention,
   isBinaryContent,
   normalizeForwardedContext,
   renderTelegramTextEntities,
   resolveTelegramTextContent,
   resolveTelegramMediaPlaceholder,
+  resolveTelegramRichMessageBody,
+  resolveTelegramRichMessagePlaceholder,
+  resolveTelegramRichMessageText,
   type TelegramForwardedContext,
   type TelegramTextEntity,
 } from "./body-helpers.js";
@@ -51,11 +55,15 @@ export {
   buildSenderName,
   extractTelegramLocation,
   getTelegramTextParts,
+  hasBotMentionInText,
   hasBotMention,
   isBinaryContent,
   normalizeForwardedContext,
   renderTelegramTextEntities,
   resolveTelegramMediaPlaceholder,
+  resolveTelegramRichMessageBody,
+  resolveTelegramRichMessagePlaceholder,
+  resolveTelegramRichMessageText,
 };
 
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
@@ -199,7 +207,7 @@ export function withResolvedTelegramForumFlag<T extends { chat: object }>(
 }
 
 export async function resolveTelegramGroupAllowFromContext(params: {
-  cfg?: OpenClawConfig;
+  cfg: OpenClawConfig;
   chatId: string | number;
   accountId?: string;
   dmPolicy?: DmPolicy;
@@ -216,7 +224,8 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   readChannelAllowFromStore?: typeof readChannelAllowFromStore;
   resolveTelegramGroupConfig: (
     chatId: string | number,
-    messageThreadId?: number,
+    messageThreadId: number | undefined,
+    cfg: OpenClawConfig,
   ) => {
     groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
     topicConfig?: TelegramTopicConfig;
@@ -244,6 +253,7 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   const { groupConfig, topicConfig } = params.resolveTelegramGroupConfig(
     params.chatId,
     threadIdForConfig,
+    params.cfg,
   );
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
   const effectiveDmPolicy = resolveTelegramEffectiveDmPolicy({
@@ -423,6 +433,10 @@ export function buildTelegramThreadParams(thread?: TelegramThreadSpec | null) {
 
   if (thread.scope === "dm") {
     return normalized > 0 ? { message_thread_id: normalized } : undefined;
+  }
+
+  if (thread.scope === "none") {
+    return undefined;
   }
 
   // Telegram rejects message_thread_id=1 for General forum topic
@@ -619,11 +633,11 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
       : replyLike && typeof replyLike.caption === "string"
         ? replyLike.caption
         : undefined;
-  const safeReplyText = resolveTelegramTextContent(rawReplyText);
-  const replyTextParts = replyLike && safeReplyText ? getTelegramTextParts(replyLike) : undefined;
+  const replyTextParts = replyLike ? getTelegramTextParts(replyLike) : undefined;
+  const safeReplyText = replyTextParts?.text ?? "";
   let filteredReplyText = false;
   if (!body && replyLike) {
-    const replyBody = safeReplyText.trim();
+    const replyBody = safeReplyText.trim() || resolveTelegramRichMessageBody(replyLike) || "";
     filteredReplyText = hadUnsafeTelegramText(rawReplyText, replyBody);
     body = replyBody;
     if (!body) {

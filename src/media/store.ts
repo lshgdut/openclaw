@@ -13,7 +13,10 @@ import {
   nameFromAnyPath,
 } from "@openclaw/media-core/file-name";
 import { detectMime, extensionForMime } from "@openclaw/media-core/mime";
+import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { toErrorObject } from "../infra/errors.js";
 import { fileStore } from "../infra/file-store.js";
 import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
 import { isPathInside } from "../infra/fs-safe.js";
@@ -122,7 +125,7 @@ function sanitizeFilename(name: string): string {
   }
   const sanitized = base.replace(/[^\p{L}\p{N}._-]+/gu, "_");
   // Collapse multiple underscores, trim leading/trailing, limit length
-  return sanitized.replace(/_+/g, "_").replace(/^_|_$/g, "").slice(0, 60);
+  return truncateUtf16Safe(sanitized.replace(/_+/g, "_").replace(/^_|_$/g, ""), 60);
 }
 
 /** Restores the caller-facing filename from media-store paths with embedded UUID suffixes. */
@@ -189,10 +192,25 @@ async function retryAfterRecreatingDir<T>(dir: string, run: () => Promise<T>): P
   }
 }
 
+// Maps the cleanup mode onto the prune sweep depth. The fs-safe prune walker keys descent off
+// maxDepth whenever it is set and only falls back to the recursive flag when maxDepth is undefined,
+// so recursive:false must resolve to depth 0 (root only). Without this, recursive:false collapses
+// to the same one-level sweep as the unset default and would still descend into — and delete —
+// retained media subdirectories (e.g. media/inbound/<id>).
+function resolveCleanupMaxDepth(recursive: boolean | undefined): number | undefined {
+  if (recursive === true) {
+    return undefined; // full-tree sweep (configured maintenance timer)
+  }
+  if (recursive === false) {
+    return 0; // root-only sweep; never descend into retained subdirectories
+  }
+  return 1; // default: prune the media root and its immediate first-level subdirectories
+}
+
 /** Prunes expired media files, optionally recursing into scoped media subdirectories. */
 export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS, options: CleanOldMediaOptions = {}) {
   await openMediaStore().pruneExpired({
-    maxDepth: options.recursive ? undefined : 1,
+    maxDepth: resolveCleanupMaxDepth(options.recursive),
     ttlMs,
     recursive: options.recursive ?? true,
     pruneEmptyDirs: options.pruneEmptyDirs,
@@ -200,7 +218,7 @@ export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS, options: CleanOldMed
 }
 
 function looksLikeUrl(src: string) {
-  return /^https?:\/\//i.test(src);
+  return hasHttpUrlPrefix(src);
 }
 
 function discardIgnoredHttpResponse(res: NodeJS.ReadableStream): void {
@@ -290,7 +308,7 @@ async function downloadToFile(
             })
             .catch(async (err: unknown) => {
               await fs.rm(dest, { force: true }).catch(() => {});
-              reject(toLintErrorObject(err, "Non-Error rejection"));
+              reject(toErrorObject(err, "Non-Error rejection"));
             });
         });
         req.on("error", reject);
@@ -525,7 +543,6 @@ export async function saveMediaSource(
 ): Promise<SavedMedia> {
   const dir = resolveMediaScopedDir(subdir, "saveMediaSource");
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  await cleanOldMedia(DEFAULT_TTL_MS, { recursive: false });
   const baseId = crypto.randomUUID();
   if (looksLikeUrl(source)) {
     return await saveMediaSiblingTempFile({
@@ -737,18 +754,4 @@ export async function readMediaBuffer(
 export async function deleteMediaBuffer(id: string, subdir = "inbound"): Promise<void> {
   const relativePath = resolveMediaRelativePath(id, subdir, "deleteMediaBuffer");
   await openMediaStore().remove(relativePath);
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

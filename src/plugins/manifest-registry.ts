@@ -34,6 +34,7 @@ import {
   loadPluginManifest,
   type OpenClawPackageManifest,
   type PluginManifestActivation,
+  type PluginManifestCatalog,
   type PluginManifestConfigContracts,
   type PluginManifest,
   type PluginManifestCapabilityProviderMetadata,
@@ -53,6 +54,7 @@ import {
   type PluginManifestToolMetadata,
   type PluginPackageChannel,
   type PluginPackageInstall,
+  normalizeManifestChannelCommandDefaults,
 } from "./manifest.js";
 import { checkMinHostVersion } from "./min-host-version.js";
 import {
@@ -65,7 +67,7 @@ import { resolvePackagePluginApiRange } from "./package-compat.js";
 import { isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
-import type { PluginDependencySpecMap } from "./status-dependencies.js";
+import type { PluginDependencySpecMap } from "./status-dependencies-core.js";
 
 function resolvePluginSourcePath(sourcePath: string): string {
   if (fs.existsSync(sourcePath)) {
@@ -179,6 +181,7 @@ export type PluginManifestContractListKey =
   | "webContentExtractors"
   | "webFetchProviders"
   | "webSearchProviders"
+  | "usageProviders"
   | "migrationProviders"
   | "gatewayMethodDispatch";
 
@@ -200,6 +203,8 @@ export type PluginManifestRecord = {
   id: string;
   name?: string;
   description?: string;
+  catalog?: PluginManifestCatalog;
+  icon?: string;
   version?: string;
   packageName?: string;
   packageVersion?: string;
@@ -227,6 +232,7 @@ export type PluginManifestRecord = {
   nonSecretAuthMarkers?: string[];
   commandAliases?: PluginManifestCommandAlias[];
   providerAuthEnvVars?: Record<string, string[]>;
+  providerUsageAuthEnvVars?: Record<string, string[]>;
   providerAuthAliases?: Record<string, string>;
   channelEnvVars?: Record<string, string[]>;
   providerAuthChoices?: PluginManifest["providerAuthChoices"];
@@ -295,29 +301,6 @@ function normalizePreferredPluginIds(raw: unknown): string[] | undefined {
   return normalizeOptionalTrimmedStringList(raw);
 }
 
-function normalizePackageChannelCommands(
-  commands: unknown,
-): PluginManifestChannelCommandDefaults | undefined {
-  if (!commands || typeof commands !== "object" || Array.isArray(commands)) {
-    return undefined;
-  }
-  const record = commands as Record<string, unknown>;
-  const nativeCommandsAutoEnabled =
-    typeof record.nativeCommandsAutoEnabled === "boolean"
-      ? record.nativeCommandsAutoEnabled
-      : undefined;
-  const nativeSkillsAutoEnabled =
-    typeof record.nativeSkillsAutoEnabled === "boolean"
-      ? record.nativeSkillsAutoEnabled
-      : undefined;
-  return nativeCommandsAutoEnabled !== undefined || nativeSkillsAutoEnabled !== undefined
-    ? {
-        ...(nativeCommandsAutoEnabled !== undefined ? { nativeCommandsAutoEnabled } : {}),
-        ...(nativeSkillsAutoEnabled !== undefined ? { nativeSkillsAutoEnabled } : {}),
-      }
-    : undefined;
-}
-
 function mergePackageChannelMetaIntoChannelConfigs(params: {
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
   packageChannel?: OpenClawPackageManifest["channel"];
@@ -342,7 +325,7 @@ function mergePackageChannelMetaIntoChannelConfigs(params: {
   const preferOver =
     existing.preferOver ?? normalizePreferredPluginIds(params.packageChannel?.preferOver);
   const commands =
-    existing.commands ?? normalizePackageChannelCommands(params.packageChannel?.commands);
+    existing.commands ?? normalizeManifestChannelCommandDefaults(params.packageChannel?.commands);
 
   const merged: Record<string, PluginManifestChannelConfig> = Object.create(null);
   for (const [key, value] of Object.entries(params.channelConfigs)) {
@@ -383,6 +366,7 @@ function mergeManifestContracts(
   for (const key of [
     "embeddedExtensionFactories",
     "agentToolResultMiddleware",
+    "trustedToolPolicies",
     "externalAuthProviders",
     "embeddingProviders",
     "memoryEmbeddingProviders",
@@ -398,6 +382,7 @@ function mergeManifestContracts(
     "webContentExtractors",
     "webFetchProviders",
     "webSearchProviders",
+    "usageProviders",
     "migrationProviders",
     "gatewayMethodDispatch",
     "tools",
@@ -461,6 +446,26 @@ function mergeCatalogChannelConfigs(params: {
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
+function mergeManifestCatalog(
+  manifestCatalog: PluginManifestCatalog | undefined,
+  officialCatalog: PluginManifestCatalog | undefined,
+): PluginManifestCatalog | undefined {
+  const featuredCandidate = manifestCatalog?.featured ?? officialCatalog?.featured;
+  const orderCandidate = manifestCatalog?.order ?? officialCatalog?.order;
+  const featured = typeof featuredCandidate === "boolean" ? featuredCandidate : undefined;
+  const order =
+    typeof orderCandidate === "number" && Number.isFinite(orderCandidate)
+      ? orderCandidate
+      : undefined;
+  if (featured === undefined && order === undefined) {
+    return undefined;
+  }
+  return {
+    ...(featured !== undefined ? { featured } : {}),
+    ...(order !== undefined ? { order } : {}),
+  };
+}
+
 function buildRecord(params: {
   manifest: PluginManifest;
   candidate: PluginCandidate;
@@ -500,7 +505,7 @@ function buildRecord(params: {
     }),
     packageChannel: params.candidate.packageManifest?.channel,
   });
-  const packageChannelCommands = normalizePackageChannelCommands(
+  const packageChannelCommands = normalizeManifestChannelCommandDefaults(
     params.candidate.packageManifest?.channel?.commands,
   );
   return {
@@ -508,6 +513,8 @@ function buildRecord(params: {
     name: normalizeOptionalString(params.manifest.name) ?? params.candidate.packageName,
     description:
       normalizeOptionalString(params.manifest.description) ?? params.candidate.packageDescription,
+    catalog: mergeManifestCatalog(params.manifest.catalog, officialCatalogManifest?.catalog),
+    icon: normalizeOptionalString(params.manifest.icon),
     version: normalizeOptionalString(params.manifest.version) ?? params.candidate.packageVersion,
     packageName: params.candidate.packageName,
     packageVersion: params.candidate.packageVersion,
@@ -544,6 +551,7 @@ function buildRecord(params: {
     nonSecretAuthMarkers: params.manifest.nonSecretAuthMarkers ?? [],
     commandAliases: params.manifest.commandAliases,
     providerAuthEnvVars: params.manifest.providerAuthEnvVars,
+    providerUsageAuthEnvVars: params.manifest.providerUsageAuthEnvVars,
     providerAuthAliases: params.manifest.providerAuthAliases,
     channelEnvVars: params.manifest.channelEnvVars,
     providerAuthChoices: params.manifest.providerAuthChoices,
@@ -1203,3 +1211,8 @@ export function loadPluginManifestRegistry(
   const registry = { plugins: records, diagnostics: dedupePluginDiagnostics(diagnostics) };
   return registry;
 }
+
+export const testing = {
+  mergeManifestContracts,
+};
+export { testing as __testing };

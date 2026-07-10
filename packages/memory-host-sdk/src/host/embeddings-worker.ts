@@ -81,13 +81,20 @@ function resolveDefaultWorkerScriptPath(): string {
 /** Keep only local embedding options that are safe and necessary to send over IPC. */
 function serializeLocalEmbeddingOptions(
   options: EmbeddingProviderOptions,
+  runtimeOptions?: LocalEmbeddingProviderRuntimeOptions,
 ): EmbeddingProviderOptions {
   return {
     config: {},
     provider: "local",
     model: options.model,
     fallback: "none",
-    local: options.local,
+    outputDimensionality: options.outputDimensionality,
+    local: {
+      ...options.local,
+      ...(runtimeOptions?.nodeLlamaCppImportUrl
+        ? { nodeLlamaCppImportUrl: runtimeOptions.nodeLlamaCppImportUrl }
+        : {}),
+    } as EmbeddingProviderOptions["local"],
   };
 }
 
@@ -326,6 +333,13 @@ class LocalEmbeddingWorkerClient {
     if (!child) {
       return;
     }
+    this.rejectPending(
+      createLocalEmbeddingWorkerFailureError({
+        message: "Local embedding worker exited unexpectedly (shutdown)",
+        code: LOCAL_EMBEDDING_WORKER_ERROR_CODES.exited,
+        reason: "exit",
+      }),
+    );
     if (child.connected) {
       child.disconnect();
     }
@@ -351,7 +365,7 @@ export async function createLocalEmbeddingWorkerProvider(
   runtimeOptions?: LocalEmbeddingProviderRuntimeOptions,
 ): Promise<EmbeddingProvider> {
   const modelPath = normalizeOptionalString(options.local?.modelPath) || DEFAULT_LOCAL_MODEL;
-  const workerOptions = serializeLocalEmbeddingOptions(options);
+  const workerOptions = serializeLocalEmbeddingOptions(options, runtimeOptions);
   const client = new LocalEmbeddingWorkerClient(
     runtimeOptions?.workerScriptPath ?? resolveDefaultWorkerScriptPath(),
   );

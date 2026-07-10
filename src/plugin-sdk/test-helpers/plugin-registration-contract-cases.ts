@@ -187,7 +187,7 @@ export const pluginRegistrationContractCases = {
   },
   parallel: {
     pluginId: "parallel",
-    webSearchProviderIds: ["parallel"],
+    webSearchProviderIds: ["parallel", "parallel-free"],
   },
   perplexity: {
     pluginId: "perplexity",
@@ -208,6 +208,8 @@ export const pluginRegistrationContractCases = {
       "qwen-oauth",
       "qwen-portal",
       "qwen-cli",
+      "qwen-token-plan",
+      "bailian-token-plan",
     ],
     mediaUnderstandingProviderIds: ["qwen"],
     videoGenerationProviderIds: ["qwen"],

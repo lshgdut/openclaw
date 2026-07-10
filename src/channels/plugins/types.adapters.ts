@@ -526,6 +526,7 @@ export type ChannelDoctorAdapter = {
   repairConfig?: (params: {
     cfg: OpenClawConfig;
     doctorFixCommand: string;
+    env?: NodeJS.ProcessEnv;
   }) => ChannelDoctorConfigMutation | Promise<ChannelDoctorConfigMutation>;
   runConfigSequence?: (params: {
     cfg: OpenClawConfig;
@@ -631,6 +632,11 @@ export type ChannelApprovalAdapter = {
   render?: ChannelApprovalRenderAdapter;
   native?: ChannelApprovalNativeAdapter;
   describeExecApprovalSetup?: (params: {
+    channel: string;
+    channelLabel: string;
+    accountId?: string;
+  }) => string | null | undefined;
+  describePluginApprovalSetup?: (params: {
     channel: string;
     channelLabel: string;
     accountId?: string;
@@ -766,6 +772,7 @@ export type ChannelConfiguredBindingProvider = {
 
 export type ChannelConversationBindingSupport = {
   supportsCurrentConversationBinding?: boolean;
+  isCurrentConversationBindingSupported?: (params: { accountId: string }) => boolean;
   /**
    * Preferred placement when a command is started from a top-level conversation
    * without an existing native thread id.

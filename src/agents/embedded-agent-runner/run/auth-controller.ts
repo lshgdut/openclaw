@@ -9,6 +9,7 @@ import {
   type AuthProfileStore,
   isProfileInCooldown,
   resolveProfilesUnavailableReason,
+  resolveSubscriptionAuthModeForProfiles,
 } from "../../auth-profiles.js";
 import { formatAuthProfileFailureMessage } from "../../auth-profiles/failure-copy.js";
 import {
@@ -24,9 +25,13 @@ import {
   type ResolvedProviderAuth,
 } from "../../model-auth.js";
 import {
-  resolveProviderRequestConfig,
-  sanitizeRuntimeProviderRequestOverrides,
+  applyPreparedRuntimeAuthToModel,
+  type ModelProviderRequestTransportOverrides,
 } from "../../provider-request-config.js";
+import {
+  protectPreparedProviderRuntimeAuth,
+  unwrapSecretSentinelsForProviderEgress,
+} from "../../provider-secret-egress.js";
 import { clampRuntimeAuthRefreshDelayMs } from "../../runtime-auth-refresh.js";
 import {
   RUNTIME_AUTH_REFRESH_MARGIN_MS,
@@ -88,41 +93,22 @@ export function createEmbeddedRunAuthController(params: {
     runtimeModel: Model;
     preparedAuth: {
       baseUrl?: string;
-      request?: Parameters<typeof resolveProviderRequestConfig>[0]["request"];
+      request?: ModelProviderRequestTransportOverrides;
     };
   }): void => {
-    if (!paramsForApply.preparedAuth.baseUrl && !paramsForApply.preparedAuth.request) {
+    const runtimeModel = applyPreparedRuntimeAuthToModel(
+      paramsForApply.runtimeModel,
+      paramsForApply.preparedAuth,
+    );
+    if (runtimeModel === paramsForApply.runtimeModel) {
       return;
     }
-    const runtimeRequestConfig = resolveProviderRequestConfig({
-      provider: paramsForApply.runtimeModel.provider,
-      api: paramsForApply.runtimeModel.api,
-      baseUrl: paramsForApply.preparedAuth.baseUrl ?? paramsForApply.runtimeModel.baseUrl,
-      providerHeaders:
-        paramsForApply.runtimeModel.headers &&
-        typeof paramsForApply.runtimeModel.headers === "object"
-          ? paramsForApply.runtimeModel.headers
-          : undefined,
-      request: sanitizeRuntimeProviderRequestOverrides(paramsForApply.preparedAuth.request),
-      capability: "llm",
-      transport: "stream",
-    });
     // Runtime auth plugins may override baseUrl and safe request auth headers,
-    // but sanitizeRuntimeProviderRequestOverrides strips privileged transport knobs.
-    params.setRuntimeModel({
-      ...paramsForApply.runtimeModel,
-      ...(paramsForApply.preparedAuth.baseUrl
-        ? { baseUrl: paramsForApply.preparedAuth.baseUrl }
-        : {}),
-      ...(runtimeRequestConfig.headers ? { headers: runtimeRequestConfig.headers } : {}),
-    });
-    params.setEffectiveModel({
-      ...params.getEffectiveModel(),
-      ...(paramsForApply.preparedAuth.baseUrl
-        ? { baseUrl: paramsForApply.preparedAuth.baseUrl }
-        : {}),
-      ...(runtimeRequestConfig.headers ? { headers: runtimeRequestConfig.headers } : {}),
-    });
+    // while the shared applier strips privileged transport knobs.
+    params.setRuntimeModel(runtimeModel);
+    params.setEffectiveModel(
+      applyPreparedRuntimeAuthToModel(params.getEffectiveModel(), paramsForApply.preparedAuth),
+    );
   };
 
   const hasRefreshableRuntimeAuth = () =>
@@ -135,8 +121,8 @@ export function createEmbeddedRunAuthController(params: {
     apiKey: string;
     authMode: string;
     profileId?: string;
-  }) =>
-    prepareProviderRuntimeAuth({
+  }) => {
+    const preparedAuth = await prepareProviderRuntimeAuth({
       provider: prepareParams.runtimeModel.provider,
       config: params.config,
       workspaceDir: params.workspaceDir,
@@ -149,11 +135,20 @@ export function createEmbeddedRunAuthController(params: {
         provider: prepareParams.runtimeModel.provider,
         modelId: params.getModelId(),
         model: prepareParams.runtimeModel,
-        apiKey: prepareParams.apiKey,
+        apiKey: unwrapSecretSentinelsForProviderEgress(
+          prepareParams.apiKey,
+          "provider runtime auth exchange",
+        ),
         authMode: prepareParams.authMode,
         profileId: prepareParams.profileId,
       },
     });
+    return protectPreparedProviderRuntimeAuth({
+      sourceApiKey: prepareParams.apiKey,
+      provider: prepareParams.runtimeModel.provider,
+      preparedAuth,
+    });
+  };
 
   const clearRuntimeAuthRefreshTimer = () => {
     const runtimeAuthState = params.getRuntimeAuthState();
@@ -357,10 +352,20 @@ export function createEmbeddedRunAuthController(params: {
         env: process.env,
       });
     if (params.fallbackConfigured) {
+      const authMode =
+        reason === "billing"
+          ? resolveSubscriptionAuthModeForProfiles({
+              store: params.authStore,
+              profileIds: failoverParams.allInCooldown
+                ? params.profileCandidates
+                : [params.profileCandidates[params.getProfileIndex()]],
+            })
+          : undefined;
       throw new FailoverError(message, {
         reason,
         provider,
         model: modelId,
+        authMode,
         status: resolveFailoverStatus(reason),
         authProfileFailure: { allInCooldown: failoverParams.allInCooldown },
         cause: failoverParams.error,
@@ -381,6 +386,7 @@ export function createEmbeddedRunAuthController(params: {
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
       lockedProfile: candidate != null && candidate === params.lockedProfileId,
+      secretSentinels: true,
     });
   };
 

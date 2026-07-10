@@ -21,6 +21,10 @@ export type OAuthCredentials = {
   projectId?: string;
   accountId?: string;
   chatgptPlanType?: string;
+  /** Non-secret subscription plan captured from external CLI logins (e.g. "max"). */
+  subscriptionType?: string;
+  /** Non-secret rate-limit tier captured from external CLI logins (e.g. "default_max_20x"). */
+  rateLimitTier?: string;
   idToken?: string;
 };
 
@@ -139,6 +143,8 @@ export type AuthProfileStateStore = {
 /** Effective in-memory auth store combining credentials, state, and overlays. */
 export type AuthProfileStore = AuthProfileSecretsStore &
   AuthProfileState & {
+    /** Runtime-only provenance for credentials cloned from persisted auth stores. */
+    runtimePersistedProfileIds?: string[];
     /** Runtime-only provenance for external OAuth profiles overlaid onto this store. */
     runtimeExternalProfileIds?: string[];
     /** True when the runtime external profile set was freshly resolved, even if empty. */

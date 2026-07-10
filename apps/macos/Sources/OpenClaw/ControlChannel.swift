@@ -245,7 +245,8 @@ final class ControlChannel {
     func request(
         method: String,
         params: [String: AnyHashable]? = nil,
-        timeoutMs: Double? = nil) async throws -> Data
+        timeoutMs: Double? = nil,
+        retryTransportFailures: Bool = true) async throws -> Data
     {
         do {
             let rawParams = params?.reduce(into: [String: OpenClawKit.AnyCodable]()) {
@@ -254,7 +255,8 @@ final class ControlChannel {
             let data = try await GatewayConnection.shared.request(
                 method: method,
                 params: rawParams,
-                timeoutMs: timeoutMs)
+                timeoutMs: timeoutMs,
+                retryTransportFailures: retryTransportFailures)
             self.setStateThrottled(.connected)
             return data
         } catch {
@@ -341,7 +343,9 @@ final class ControlChannel {
 
         let detail = nsError.localizedDescription.isEmpty ? "unknown gateway error" : nsError.localizedDescription
         let trimmed = detail.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.lowercased().hasPrefix("gateway error:") { return trimmed }
+        if trimmed.lowercased().hasPrefix("gateway error:") {
+            return trimmed
+        }
         return "Gateway error: \(trimmed)"
     }
 
@@ -363,7 +367,9 @@ final class ControlChannel {
 
     private func scheduleRecovery(reason: String) {
         let now = Date()
-        if let last = self.lastRecoveryAt, now.timeIntervalSince(last) < 10 { return }
+        if let last = self.lastRecoveryAt, now.timeIntervalSince(last) < 10 {
+            return
+        }
         guard self.recoveryTask == nil else { return }
         self.lastRecoveryAt = now
 

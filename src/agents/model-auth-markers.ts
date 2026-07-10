@@ -36,6 +36,7 @@ const AWS_SDK_ENV_MARKERS = new Set([
 const CORE_NON_SECRET_API_KEY_MARKERS = [
   CUSTOM_LOCAL_AUTH_MARKER,
   CODEX_APP_SERVER_AUTH_MARKER,
+  GCP_VERTEX_CREDENTIALS_MARKER,
   OLLAMA_LOCAL_AUTH_MARKER,
   NON_ENV_SECRETREF_MARKER,
 ] as const;
@@ -132,7 +133,8 @@ export function isNonSecretApiKeyMarker(
   const isKnownMarker =
     isOAuthApiKeyMarker(trimmed) ||
     listKnownNonSecretApiKeyMarkers().includes(trimmed) ||
-    isAwsSdkAuthMarker(trimmed);
+    isAwsSdkAuthMarker(trimmed) ||
+    isSecretRefHeaderValueMarker(trimmed);
   if (isKnownMarker) {
     return true;
   }

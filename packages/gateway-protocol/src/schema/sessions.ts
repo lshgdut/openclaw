@@ -63,6 +63,98 @@ export const SessionCompactionCheckpointSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Session file grouping used by the Control UI session workspace rail. */
+export const SessionFileKindSchema = Type.Union([Type.Literal("modified"), Type.Literal("read")]);
+
+/** Session relevance marker for browser entries. */
+export const SessionFileRelevanceSchema = Type.Union([
+  Type.Literal("modified"),
+  Type.Literal("read"),
+  Type.Literal("mixed"),
+]);
+
+/** One file path referenced by a session transcript. */
+export const SessionFileEntrySchema = Type.Object(
+  {
+    path: NonEmptyString,
+    workspacePath: Type.Optional(NonEmptyString),
+    name: NonEmptyString,
+    kind: SessionFileKindSchema,
+    missing: Type.Boolean(),
+    size: Type.Optional(Type.Integer({ minimum: 0 })),
+    updatedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    content: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+/** One file or folder in the session-rooted browser. */
+export const SessionFileBrowserEntrySchema = Type.Object(
+  {
+    path: Type.String(),
+    name: NonEmptyString,
+    kind: Type.Union([Type.Literal("file"), Type.Literal("directory")]),
+    sessionKind: Type.Optional(SessionFileRelevanceSchema),
+    size: Type.Optional(Type.Integer({ minimum: 0 })),
+    updatedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
+
+/** Folder listing or search result rooted at the session workspace. */
+export const SessionFileBrowserResultSchema = Type.Object(
+  {
+    path: Type.String(),
+    parentPath: Type.Optional(Type.String()),
+    search: Type.Optional(Type.String()),
+    entries: Type.Array(SessionFileBrowserEntrySchema),
+    truncated: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+/** Lists files touched by a session transcript. */
+export const SessionsFilesListParamsSchema = Type.Object(
+  {
+    sessionKey: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+    path: Type.Optional(Type.String()),
+    search: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+/** File references visible in one session workspace. */
+export const SessionsFilesListResultSchema = Type.Object(
+  {
+    sessionKey: NonEmptyString,
+    root: Type.Optional(NonEmptyString),
+    files: Type.Array(SessionFileEntrySchema),
+    browser: Type.Optional(SessionFileBrowserResultSchema),
+  },
+  { additionalProperties: false },
+);
+
+/** Reads one session-referenced file by path. */
+export const SessionsFilesGetParamsSchema = Type.Object(
+  {
+    sessionKey: NonEmptyString,
+    path: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
+/** Result for reading one session-referenced file. */
+export const SessionsFilesGetResultSchema = Type.Object(
+  {
+    sessionKey: NonEmptyString,
+    root: Type.Optional(NonEmptyString),
+    file: SessionFileEntrySchema,
+  },
+  { additionalProperties: false },
+);
+
 /** Lists sessions with optional scope, activity, label, and preview filters. */
 export const SessionsListParamsSchema = Type.Object(
   {
@@ -94,6 +186,8 @@ export const SessionsListParamsSchema = Type.Object(
     spawnedBy: Type.Optional(NonEmptyString),
     agentId: Type.Optional(NonEmptyString),
     search: Type.Optional(Type.String()),
+    /** True lists archived sessions; false or omitted lists active sessions. */
+    archived: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
@@ -141,6 +235,8 @@ export const SessionsResolveParamsSchema = Type.Object(
     spawnedBy: Type.Optional(NonEmptyString),
     includeGlobal: Type.Optional(Type.Boolean()),
     includeUnknown: Type.Optional(Type.Boolean()),
+    /** Return a successful `{ ok: false }` response when the selector does not match a session. */
+    allowMissing: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
@@ -153,11 +249,64 @@ export const SessionsCreateParamsSchema = Type.Object(
     label: Type.Optional(SessionLabelString),
     model: Type.Optional(NonEmptyString),
     parentSessionKey: Type.Optional(NonEmptyString),
+    fork: Type.Optional(
+      Type.Boolean({ description: "Fork the parent transcript; requires parentSessionKey." }),
+    ),
     emitCommandHooks: Type.Optional(Type.Boolean()),
     task: Type.Optional(Type.String()),
     message: Type.Optional(Type.String()),
+    worktree: Type.Optional(Type.Boolean()),
+    worktreeBaseRef: Type.Optional(
+      Type.String({
+        minLength: 1,
+        description: "Base ref for the new managed worktree branch. Requires worktree=true.",
+      }),
+    ),
+    worktreeName: Type.Optional(
+      Type.String({
+        pattern: "^[a-z0-9][a-z0-9-]{0,63}$",
+        description:
+          "Managed worktree name; becomes branch openclaw/<name>. Requires worktree=true.",
+      }),
+    ),
+    execNode: Type.Optional(
+      Type.String({
+        minLength: 1,
+        description:
+          "Bind session exec to host=node with this node id/name. Requires operator.admin.",
+      }),
+    ),
+    cwd: Type.Optional(
+      Type.String({
+        minLength: 1,
+        description:
+          "Absolute source directory for a managed worktree. Requires worktree=true and operator.admin.",
+      }),
+    ),
   },
   { additionalProperties: false },
+);
+
+export const SessionWorktreeInfoSchema = Type.Object(
+  {
+    id: NonEmptyString,
+    path: NonEmptyString,
+    branch: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+/** Result returned after creating or adopting a session. */
+export const SessionsCreateResultSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    key: NonEmptyString,
+    sessionId: Type.Optional(NonEmptyString),
+    entry: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+    runStarted: Type.Optional(Type.Boolean()),
+    worktree: Type.Optional(SessionWorktreeInfoSchema),
+  },
+  { additionalProperties: true },
 );
 
 /** Sends one message into an existing session. */
@@ -208,8 +357,15 @@ export const SessionsPatchParamsSchema = Type.Object(
     key: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
     label: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
+    /** User-defined organization bucket ("category", not chat-group); null clears it. */
+    category: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
+    archived: Type.Optional(Type.Boolean()),
+    pinned: Type.Optional(Type.Boolean()),
+    unread: Type.Optional(
+      Type.Boolean({ description: "Set true to mark unread; false records the session as read." }),
+    ),
     thinkingLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-    fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
+    fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto"), Type.Null()])),
     verboseLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     traceLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     reasoningLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
@@ -289,8 +445,64 @@ export const SessionsDeleteParamsSchema = Type.Object(
     key: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
     deleteTranscript: Type.Optional(Type.Boolean()),
+    // Internal compare-and-delete guard for lifecycle-owned cleanup.
+    expectedSessionId: Type.Optional(NonEmptyString),
+    expectedLifecycleRevision: Type.Optional(NonEmptyString),
+    expectedSessionUpdatedAt: Type.Optional(Type.Number({ minimum: 0 })),
     // Internal control: when false, still unbind thread bindings but skip hook emission.
     emitLifecycleHooks: Type.Optional(Type.Boolean()),
+    /**
+     * Restricts the delete to already-archived sessions (archive-then-delete).
+     * operator.write callers must set this; deletes without it require
+     * operator.admin.
+     */
+    archivedOnly: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+/** Lists the gateway-owned custom session group catalog (names + order). */
+export const SessionsGroupsListParamsSchema = Type.Object({}, { additionalProperties: false });
+
+/** One custom session group catalog entry. */
+export const SessionGroupSchema = Type.Object(
+  {
+    name: SessionLabelString,
+    position: Type.Integer({ minimum: 0 }),
+  },
+  { additionalProperties: false },
+);
+
+/** Custom session group catalog in display order. */
+export const SessionsGroupsListResultSchema = Type.Object(
+  { groups: Type.Array(SessionGroupSchema) },
+  { additionalProperties: false },
+);
+
+/** Replaces the ordered group catalog; creates listed names, keeps member categories untouched. */
+export const SessionsGroupsPutParamsSchema = Type.Object(
+  { names: Type.Array(SessionLabelString, { maxItems: 200 }) },
+  { additionalProperties: false },
+);
+
+/** Renames a group and repoints every member session's category. */
+export const SessionsGroupsRenameParamsSchema = Type.Object(
+  { name: SessionLabelString, to: SessionLabelString },
+  { additionalProperties: false },
+);
+
+/** Deletes a group and clears every member session's category. */
+export const SessionsGroupsDeleteParamsSchema = Type.Object(
+  { name: SessionLabelString },
+  { additionalProperties: false },
+);
+
+/** Result for group catalog mutations, with member sessions updated where applicable. */
+export const SessionsGroupsMutationResultSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    groups: Type.Array(SessionGroupSchema),
+    updatedSessions: Type.Optional(Type.Integer({ minimum: 0 })),
   },
   { additionalProperties: false },
 );
@@ -434,6 +646,8 @@ export const SessionsUsageParamsSchema = Type.Object(
     includeHistorical: Type.Optional(Type.Boolean()),
     /** UTC offset to use when mode is `specific` (for example, UTC-4 or UTC+5:30). */
     utcOffset: Type.Optional(Type.String({ pattern: "^UTC[+-]\\d{1,2}(?::[0-5]\\d)?$" })),
+    /** IANA time zone for `specific`; preferred over `utcOffset`, which remains a compatibility fallback. */
+    timeZone: Type.Optional(NonEmptyString),
     /** Maximum sessions to return (default 50). */
     limit: Type.Optional(Type.Integer({ minimum: 1 })),
     /** Include context weight breakdown (systemPromptReport). */
